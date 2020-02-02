@@ -827,12 +827,12 @@ bool loadDefaults() {
   StaticJsonBuffer<600> jsonBuffer;
   JsonObject& json = jsonBuffer.createObject();
   json["version"] = version;
-  json["accesspointmode"] = "0";//was 1
-  json["ssid"] = "SSID";
-  json["password"] = "password";
+  json["accesspointmode"] = "1";
+  json["ssid"] = "ESP-RFID-Tool";
+  json["password"] = "";
   json["channel"] = "6";
   json["hidden"] = "0";
-  json["local_IP"] = "192.168.1.4";
+  json["local_IP"] = "192.168.1.1";
   json["gateway"] = "192.168.1.1";
   json["subnet"] = "255.255.255.0";
   json["update_username"] = "admin";
@@ -847,10 +847,10 @@ bool loadDefaults() {
   json["txdelayus"] = "40";
   json["txdelayms"] = "2";
   json["safemode"] = "0";
-  json["mqtt_host"] = "192.168.1.3";
+  json["mqtt_host"] = "192.168.1.2";
   json["mqtt_port"] = "1883";
   json["mqtt_topic"] = "domoticz/in";
-  json["domoticz_idx"] = "1337";//the id from your previously created virtual device
+  json["domoticz_idx"] = "1337";//the id from your previously created virtual device in domoticz
   File configFile = SPIFFS.open("/esprfidtool.json", "w");
   json.printTo(configFile);
   configFile.close();
