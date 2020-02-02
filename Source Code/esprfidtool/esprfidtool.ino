@@ -3,19 +3,19 @@
  * by Corey Harding of www.Exploit.Agency / www.LegacySecurityGroup.com
  * ESP-RFID-Tool Software is distributed under the MIT License. The license and copyright notice can not be removed and must be distributed alongside all future copies of the software.
  * MIT License
-    
+
     Copyright (c) [2018] [Corey Harding]
-    
+
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to deal
     in the Software without restriction, including without limitation the rights
     to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
     copies of the Software, and to permit persons to whom the Software is
     furnished to do so, subject to the following conditions:
-    
+
     The above copyright notice and this permission notice shall be included in all
     copies or substantial portions of the Software.
-    
+
     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
     AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
@@ -39,7 +39,9 @@
 #include <ArduinoJson.h> // ArduinoJson library 5.11.0 by Benoit Blanchon https://github.com/bblanchon/ArduinoJson
 #include <ESP8266FtpServer.h> // https://github.com/exploitagency/esp8266FTPServer/tree/feature/bbx10_speedup
 #include <DNSServer.h>
-#include <ESP8266mDNS.h>
+
+#define DEBUG_ESP_PORT 1
+#include <ESP8266MQTTClient.h> //https://github.com/tuanpmt/ESP8266MQTTClient version 1.0.4
 
 #define DATA0 14
 #define DATA1 12
@@ -58,6 +60,7 @@ const byte DNS_PORT = 53;
 DNSServer dnsServer;
 
 HTTPClient http;
+MQTTClient mqttClient;
 
 const char* update_path = "/update";
 int accesspointmode;
@@ -70,6 +73,10 @@ char gatewaystr[16];
 char subnetstr[16];
 char update_username[32];
 char update_password[64];
+char mqtt_host[32];
+char mqtt_port[16];
+char mqtt_topic[32];
+char domoticz_idx[16];
 char ftp_username[32];
 char ftp_password[64];
 int ftpenabled;
@@ -110,7 +117,7 @@ void LogWiegand(WiegandNG &tempwg) {
   binChunk2exists=false;
   int binChunk2len=0;
   int j=0;
-  
+
   for (unsigned int i=bufferSize-countedBytes; i< bufferSize;i++) {
     unsigned char bufByte=buffer[i];
     for(int x=0; x<8;x++) {
@@ -393,7 +400,7 @@ void LogWiegand(WiegandNG &tempwg) {
   else {
     preambleLen=(44-countedBits);
   }
-  
+
   f.print(String()+countedBits+F(" bit card,"));
 
   if (countedBits==4||countedBits==8) {
@@ -408,7 +415,7 @@ void LogWiegand(WiegandNG &tempwg) {
   if (unknown!=true) {
     f.print(String()+preambleLen+F(" bit preamble,"));
   }
-  
+
   f.print(F("Binary:"));
 
   //f.print(" ");  //debug line
@@ -423,7 +430,7 @@ void LogWiegand(WiegandNG &tempwg) {
       }
     }
   }
-  
+
   if ((countedBits>=24) && unknown!=true) {
     for(int i = 24; i--;) {
       f.print(bitRead(cardChunk2, i));
@@ -487,11 +494,18 @@ void LogWiegand(WiegandNG &tempwg) {
 
   if (countedBits<=52 && unknown!=true) {
     f.print(",HEX:");
+    char rfid[40];
     if (binChunk2exists==true) {
       f.print(cardChunk1, HEX);
+      //sprintf(rfid, "%ld", cardChunk1);
     }
     //f.print(" "); //debug line
     f.println(cardChunk2, HEX);
+    sprintf(rfid, "%ld", cardChunk2);
+
+    String data = "{ \"idx\" : " + String(domoticz_idx) + ", \"nvalue\" : 0, \"svalue\" : \"" + String(rfid) + "\" }";
+    Serial.println("going to publish to mqtt topic: " + String(mqtt_topic) + ", data: " + data);
+    mqttClient.publish(mqtt_topic, data);
   }
   else if (countedBits==4||countedBits==8) {
     f.print(",Keypad Code:");
@@ -569,12 +583,12 @@ void LogWiegand(WiegandNG &tempwg) {
     int magStart=0;
     int magEnd=1;
     //f.print("<pre>");
-  
+
     f.print(" * Trying \"Forward\" Swipe,");
     magStart=startSentinel;
     magEnd=endSentinel;
     f.println(aba2str(magstripe,magStart,magEnd,"\"Forward\" Swipe"));
-    
+
     f.print(" * Trying \"Reverse\" Swipe,");
     char magchar[249];
     magstripe.toCharArray(magchar,249);
@@ -583,7 +597,7 @@ void LogWiegand(WiegandNG &tempwg) {
     magStart=magstripe.indexOf("11010");
     magEnd=(magstripe.lastIndexOf("11111")+4);
     f.println(aba2str(magstripe,magStart,magEnd,"\"Reverse\" Swipe"));
-  
+
     //f.print("</pre>");
     //f.println(String()+F(" * You can verify the data at the following URL: <a target=\"_blank\" href=\"https://www.legacysecuritygroup.com/aba-decode.php?binary=")+magstripe+F("\">https://www.legacysecuritygroup.com/aba-decode.php?binary=")+magstripe+F("</a>"));
   }
@@ -591,7 +605,7 @@ void LogWiegand(WiegandNG &tempwg) {
 //Debug
 //  f.print(F("Free heap:"));
 //  f.println(ESP.getFreeHeap(),DEC);
-  
+
   unknown=false;
   binChunk3="";
   binChunk2exists=false;
@@ -658,7 +672,7 @@ void settingsPage()
     safemodeyes="";
     safemodeno=" checked=\"checked\"";
   }
-  server.send(200, "text/html", 
+  server.send(200, "text/html",
   String()+
   F(
   "<!DOCTYPE HTML>"
@@ -695,6 +709,13 @@ void settingsPage()
   "<b>Web Interface Administration Settings:</b><br><br>"
   "Username: <input type=\"text\" name=\"update_username\" value=\"")+update_username+F("\" maxlength=\"31\" size=\"31\"><br>"
   "Password: <input type=\"password\" name=\"update_password\" value=\"")+update_password+F("\" maxlength=\"64\" size=\"31\"><br><br>"
+  "<hr>"
+  "<b>MQTT Settings</b><br>"
+  "<small>Changes require a reboot.</small><br>"
+  "MQTT host: <input type=\"text\" name=\"mqtt_host\" value=\"")+mqtt_host+F("\" maxlength=\"31\" size=\"31\"><br>"
+  "MQTT port: <input type=\"text\" name=\"mqtt_port\" value=\"")+mqtt_port+F("\" maxlength=\"6\" size=\"6\"><br>"
+  "MQTT topic: <input type=\"text\" name=\"mqtt_topic\" value=\"")+mqtt_topic+F("\" maxlength=\"20\" size=\"20\"><br>"
+  "Domoticz idx: <input type=\"text\" name=\"domoticz_idx\" value=\"")+domoticz_idx+F("\" maxlength=\"5\" size=\"5\"><br>"
   "<hr>"
   "<b>FTP Server Settings</b><br>"
   "<small>Changes require a reboot.</small><br>"
@@ -760,7 +781,7 @@ void handleSubmitSettings()
   String SETTINGSvalue;
 
   if (!server.hasArg("SETTINGS")) return returnFail("BAD ARGS");
-  
+
   SETTINGSvalue = server.arg("SETTINGS");
   accesspointmode = server.arg("accesspointmode").toInt();
   server.arg("ssid").toCharArray(ssid, 32);
@@ -782,7 +803,11 @@ void handleSubmitSettings()
   txdelayus = server.arg("txdelayus").toInt();
   txdelayms = server.arg("txdelayms").toInt();
   safemode = server.arg("safemode").toInt();
-  
+  server.arg("mqtt_host").toCharArray(mqtt_host, 32);
+  server.arg("mqtt_port").toCharArray(mqtt_port, 16);
+  server.arg("mqtt_topic").toCharArray(mqtt_topic, 32);
+  server.arg("domoticz_idx").toCharArray(domoticz_idx, 16);
+
   if (SETTINGSvalue == "1") {
     saveConfig();
     server.send(200, "text/html", F("<a href=\"/\"><- BACK TO INDEX</a><br><br><a href=\"/reboot\"><button>Reboot Device</button></a><br><br>Settings have been saved.<br>Some setting may require manually rebooting before taking effect.<br>If network configuration has changed then be sure to connect to the new network first in order to access the web interface."));
@@ -798,15 +823,16 @@ void handleSubmitSettings()
 }
 
 bool loadDefaults() {
-  StaticJsonBuffer<500> jsonBuffer;
+  //Serial.println("going to create json file");
+  StaticJsonBuffer<600> jsonBuffer;
   JsonObject& json = jsonBuffer.createObject();
   json["version"] = version;
-  json["accesspointmode"] = "1";
-  json["ssid"] = "ESP-RFID-Tool";
-  json["password"] = "";
+  json["accesspointmode"] = "0";//was 1
+  json["ssid"] = "SSID";
+  json["password"] = "password";
   json["channel"] = "6";
   json["hidden"] = "0";
-  json["local_IP"] = "192.168.1.1";
+  json["local_IP"] = "192.168.1.4";
   json["gateway"] = "192.168.1.1";
   json["subnet"] = "255.255.255.0";
   json["update_username"] = "admin";
@@ -821,6 +847,10 @@ bool loadDefaults() {
   json["txdelayus"] = "40";
   json["txdelayms"] = "2";
   json["safemode"] = "0";
+  json["mqtt_host"] = "192.168.1.3";
+  json["mqtt_port"] = "1883";
+  json["mqtt_topic"] = "domoticz/in";
+  json["domoticz_idx"] = "1337";//the id from your previously created virtual device
   File configFile = SPIFFS.open("/esprfidtool.json", "w");
   json.printTo(configFile);
   configFile.close();
@@ -829,9 +859,13 @@ bool loadDefaults() {
 }
 
 bool loadConfig() {
+  //Serial.println("going to open json file");
   File configFile = SPIFFS.open("/esprfidtool.json", "r");
+  
   if (!configFile) {
+    //Serial.println("delay");
     delay(3500);
+    //Serial.println("going to load defaults");
     loadDefaults();
   }
 
@@ -839,9 +873,9 @@ bool loadConfig() {
 
   std::unique_ptr<char[]> buf(new char[size]);
   configFile.readBytes(buf.get(), size);
-  StaticJsonBuffer<500> jsonBuffer;
+  StaticJsonBuffer<600> jsonBuffer;
   JsonObject& json = jsonBuffer.parseObject(buf.get());
-  
+
   if (!json["version"]) {
     delay(3500);
     loadDefaults();
@@ -854,7 +888,22 @@ bool loadConfig() {
     loadDefaults();
     ESP.restart();
   }
-
+  //Serial.println("get data from json object");
+  
+  //Serial.println("going to read mqtt_host from json object");
+  strcpy(mqtt_host, (const char*)json["mqtt_host"]);
+  //Serial.println("going to read mqtt_host from json object");
+  
+  //Serial.println("going to read mqtt_port from json object");
+  strcpy(mqtt_port, (const char*)json["mqtt_port"]);
+  //Serial.println("going to read mqtt_port from json object" + String(mqtt_port));
+  
+  //Serial.println("going to read mqtt_topic from json object");
+  strcpy(mqtt_topic, (const char*)json["mqtt_topic"]);
+  
+  //Serial.println("going to read domoticz_idx from json object");
+  strcpy(domoticz_idx, (const char*)json["domoticz_idx"]);
+  
   strcpy(ssid, (const char*)json["ssid"]);
   strcpy(password, (const char*)json["password"]);
   channel = json["channel"];
@@ -877,7 +926,8 @@ bool loadConfig() {
   txdelayus = json["txdelayus"];
   txdelayms = json["txdelayms"];
   safemode = json["safemode"];
- 
+
+
   IPAddress local_IP;
   local_IP.fromString(local_IPstr);
   IPAddress gateway;
@@ -895,6 +945,13 @@ bool loadConfig() {
   Serial.println(gateway);
   Serial.println(subnet);
 */
+/*
+  Serial.println(accesspointmode);
+  Serial.println(mqtt_host);
+  Serial.println(mqtt_port);
+  Serial.println(mqtt_topic);
+  Serial.println(domoticz_idx);
+*/  
   WiFi.persistent(false);
   //ESP.eraseConfig();
 // Determine if set to Access point mode
@@ -937,7 +994,7 @@ bool loadConfig() {
 }
 
 bool saveConfig() {
-  StaticJsonBuffer<500> jsonBuffer;
+  StaticJsonBuffer<600> jsonBuffer;
   JsonObject& json = jsonBuffer.createObject();
   json["version"] = version;
   json["accesspointmode"] = accesspointmode;
@@ -960,6 +1017,10 @@ bool saveConfig() {
   json["txdelayus"] = txdelayus;
   json["txdelayms"] = txdelayms;
   json["safemode"] = safemode;
+  json["mqtt_host"] = mqtt_host;
+  json["mqtt_port"] = mqtt_port;
+  json["mqtt_topic"] = mqtt_topic;
+  json["domoticz_idx"] = domoticz_idx;
 
   File configFile = SPIFFS.open("/esprfidtool.json", "w");
   json.printTo(configFile);
@@ -1044,31 +1105,36 @@ void ViewLog(){
 
 // Start Networking
 void setup() {
-  Serial.begin(9600);
+  //Serial.begin(9600);
+  Serial.begin(115200);
+  
   Serial.println(F("....."));
-  Serial.println(String()+F("ESP-RFID-Tool v")+version);
+  Serial.println(String()+F("ESP-RFID-Tool-mqtt v")+version);
   //SPIFFS.format();
-  
+
+  Serial.println(F("SPIFFS.begin"));
   SPIFFS.begin();
-  
- //loadDefaults(); //uncomment to restore default settings if double reset fails for some reason
+  //Serial.println(F("loadDefaults"));
+  //loadDefaults(); //uncomment to restore default settings if double reset fails for some reason
 
 //Jump RESTORE_DEFAULTS_PIN to GND while powering on device to reset the device to factory defaults
   pinMode(RESTORE_DEFAULTS_PIN, INPUT_PULLUP);
   jumperState = digitalRead(RESTORE_DEFAULTS_PIN);
   if (jumperState == LOW) {
     Serial.println(String()+F("Pin ")+RESTORE_DEFAULTS_PIN+F("Grounded"));
-    Serial.println(F("Loading default config..."));
+    //Serial.println(F("Loading default config..."));
     loadDefaults();
   }
-  
+  //Serial.println(F("going to loadConfig"));
   loadConfig();
 
-  if(!wg.begin(DATA0,DATA1,bufferlength,rxpacketgap)) {       
-    Serial.println(F("Could not begin Wiegand logging,"));            
+  //Serial.println(F("going to initiate wiegand"));
+  if(!wg.begin(DATA0,DATA1,bufferlength,rxpacketgap)) {
+    Serial.println(F("Could not begin Wiegand logging,"));
     Serial.println(F("Out of memory!"));
   }
 
+  //Serial.println(F("Set up webpages"));
 //Set up Web Pages
   server.on("/",[]() {
     FSInfo fs_info;
@@ -1152,7 +1218,7 @@ void setup() {
     delay(50);
     ESP.restart();
   });
-  
+
   server.on("/format/yes", [](){
     if(!server.authenticate(update_username, update_password))
       return server.requestAuthentication();
@@ -1163,11 +1229,11 @@ void setup() {
 //    Serial.println(" Success");
     saveConfig();
   });
-  
+
   server.on("/help", []() {
     server.send_P(200, "text/html", HelpText);
   });
-  
+
   server.on("/license", []() {
     server.send_P(200, "text/html", License);
   });
@@ -1196,9 +1262,9 @@ void setup() {
 
       dataCONVERSION+=String()+F("Hexadecimal: ")+hexTEMP+F("<br><small>You may want to drop the leading zero(if there is one) and if your cloning software does not handle it for you.</small><br><br>");
       hexTEMP="";
-      
+
       dataCONVERSION+=F("<br><br>");
-      
+
       bin2hexBUFFlen=0;
     }
 
@@ -1230,12 +1296,12 @@ void setup() {
 
       dataCONVERSION+=String()+F("Binary: ")+binTEMP+F("<br><br>");
       binTEMP="";
-      
+
       dataCONVERSION+=F("<br><br>");
-      
+
       hex2binBUFFlen=0;
     }
-    
+
     if (server.hasArg("abaHTML")) {
       String abaHTML=(server.arg("abaHTML"));
 
@@ -1244,7 +1310,7 @@ void setup() {
       int abaStart=abaHTML.indexOf("11010");
       int abaEnd=(abaHTML.lastIndexOf("11111")+4);
       dataCONVERSION+=aba2str(abaHTML,abaStart,abaEnd,"\"Forward\" Swipe");
-      
+
       dataCONVERSION+=" * Trying \"Reverse\" Swipe<br>";
       int abaBUFFlen=((abaHTML.length())+1);
       char abachar[abaBUFFlen];
@@ -1254,7 +1320,7 @@ void setup() {
       abaStart=abaHTML.indexOf("11010");
       abaEnd=(abaHTML.lastIndexOf("11111")+4);
       dataCONVERSION+=aba2str(abaHTML,abaStart,abaEnd,"\"Reverse\" Swipe");
-    
+
       //dataCONVERSION+=(String()+F(" * You can verify the data at the following URL:<br><a target=\"_blank\" href=\"https://www.legacysecuritygroup.com/aba-decode.php?binary=")+abaHTML+F("\">https://www.legacysecuritygroup.com/aba-decode.php?binary=")+abaHTML+F("</a>"));
       dataCONVERSION.replace("*", "<br><br>");
       dataCONVERSION.replace(":", ": ");
@@ -1263,7 +1329,7 @@ void setup() {
       abaStart=0;
       abaEnd=0;
     }
-    
+
     server.send(200, "text/html", String()+F(
       "<a href=\"/\"><- BACK TO INDEX</a><br><br>")
       +dataCONVERSION+
@@ -1290,7 +1356,7 @@ void setup() {
       "</FORM>"
       )
     );
-      
+
     dataCONVERSION="";
   });
 
@@ -1322,7 +1388,7 @@ void setup() {
       }
 
       TXstatus=1;
-      
+
       wg.pause();
       digitalWrite(DATA0, HIGH);
       pinMode(DATA0,OUTPUT);
@@ -1336,7 +1402,7 @@ void setup() {
 
       experimentalStatus=String()+"Transmitting "+pinBITS+"bit Wiegand Format PIN: "+pinHTML+" with a "+pinHTMLDELAY+"ms delay between \"keypresses\"";
       delay(50);
-      
+
       int bruteSTART;
       int bruteEND;
       if (server.hasArg("bruteSTART")) {
@@ -1345,7 +1411,7 @@ void setup() {
       else {
         bruteSTART=0;
       }
-      
+
       if (server.hasArg("bruteEND")) {
         bruteEND=server.arg("bruteEND").toInt();
       }
@@ -1405,7 +1471,7 @@ void setup() {
         if (bruteENDchar!="") {
           pinHTML=pinHTML+bruteENDchar;
         }
-          
+
         for (int i=0; i<=pinHTML.length(); i++) {
           if (pinHTML.charAt(i) == '0') {
             if (pinBITS==4) {
@@ -1550,7 +1616,7 @@ void setup() {
         if (bruteFAILdelay>=4294967000) {
           bruteFAILdelay=(4294966000);
         }
-        
+
         if (bruteFAILmultiplier!=0) {
           bruteFAILmultiplierCURRENT++;
           if (bruteFAILmultiplierCURRENT>=bruteFAILmultiplierAFTER) {
@@ -1558,14 +1624,14 @@ void setup() {
             bruteFAILdelay=(bruteFAILdelay*bruteFAILmultiplier);
           }
         }
-        
+
         if ((bruteFAILS>=bruteFAILSmax)&&(bruteFAILSmax!=0)) {
           delay(bruteFAILdelay*1000);
         }
         else {
           delay(delayAFTERpin);
         }
-        
+
       }
       pinMode(DATA0, INPUT);
       pinMode(DATA1, INPUT);
@@ -1645,7 +1711,7 @@ void setup() {
         "<a href=\"/stoptx\"><button>STOP CURRENT TRANSMISSION</button></a>");
         delay(50);
       }
-      
+
       wg.pause();
       digitalWrite(DATA0, HIGH);
       pinMode(DATA0,OUTPUT);
@@ -1704,7 +1770,7 @@ void setup() {
         "<a href=\"/stoptx\"><button>STOP CURRENT TRANSMISSION</button></a>");
         delay(50);
       }
-      
+
       wg.pause();
       digitalWrite(DATA0, HIGH);
       pinMode(DATA0,OUTPUT);
@@ -1768,7 +1834,7 @@ void setup() {
 
     String activeTX="";
     if (TXstatus==1) {
-      
+
       if (pinHTML!="") {
         String currentPIN=pinHTML;
         activeTX="Brute forcing PIN: "+currentPIN+"<br><a href=\"/stoptx\"><button>STOP CURRENT TRANSMISSION</button></a>";
@@ -1780,13 +1846,13 @@ void setup() {
       else {
         activeTX="Transmitting...<br><a href=\"/stoptx\"><button>STOP CURRENT TRANSMISSION</button></a>";
       }
-      
+
     }
     else {
       activeTX="INACTIVE<br><button>NOTHING TO STOP</button>";
     }
 
-    server.send(200, "text/html", 
+    server.send(200, "text/html",
       String()+
       F(
       "<!DOCTYPE HTML>"
@@ -1904,7 +1970,9 @@ void setup() {
   WiFiClient client;
   client.setNoDelay(1);
 
-//  Serial.println("Web Server Started");
+  configTime(3 * 3600, 0, "nl.pool.ntp.org", "pool.ntp.org");
+  
+  //Serial.println("Web Server Started");
 
   MDNS.begin("ESP");
 
@@ -1912,11 +1980,15 @@ void setup() {
   httpServer.begin();
 
   MDNS.addService("http", "tcp", 1337);
-  
+
   if (ftpenabled==1){
     ftpSrv.begin(String(ftp_username),String(ftp_password));
   }
-
+    
+  String mqtt_url = "mqtt://" + String(mqtt_host) + ":" + String(mqtt_port);
+  Serial.println("going to connect to: " + String(mqtt_url));
+  mqttClient.begin(mqtt_url);
+    
 //Start RFID Reader
   pinMode(LED_BUILTIN, OUTPUT);  // LED
   if (ledenabled==1){
@@ -1953,11 +2025,20 @@ void loop()
 
   if(wg.available()) {
     wg.pause();             // pause Wiegand pin interrupts
+    //Serial.println("wg gelezen, gaat loggen");
     LogWiegand(wg);
+    //Serial.println("wg gelezen, klaar met loggen, nu wg clear");
     wg.clear();             // compulsory to call clear() to enable interrupts for subsequent data
+    
+    Serial.println("start met mqtt handle");
+    mqttClient.handle();
+    Serial.println("klaar met mqtt handle");
+    
     if (safemode==1) {
       ESP.restart();
     }
   }
+
+  
 
 }
