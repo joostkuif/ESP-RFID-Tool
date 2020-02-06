@@ -49,7 +49,9 @@ Firmware:  
 * Simulating an access control system using multiple units of ESP-RFID-Tool.  
   
 ## What is it?  
-This fork of the original repo adds functionality to *push* RFID reads towards Domoticz via an MQTT server.
+This fork adds functionality to *push* RFID reads towards Domoticz through a MQTT server.  
+Fits my needs atm :-)  
+
 A universal data logger that captures the raw binary data from a standard 5V Wiegand Interface. The device is capable of logging the credentials for access control systems or nearly any device that utilizes a Wiegand Interface such as RFID card readers, pin pads, magnetic stripe systems, barcode, and even some biometric readers. Wiegand Interfaces also do not have to be limited to just access control systems. The main target group for this device is 26-37bit HID cards.  For known card types both the binary and hexadecimal data is displayed directly in the log file for easy badge identification and also in case a clone of a card may be needed. For unknown card types only the raw binary data is shown.  
   
 ## How do you install it?  
