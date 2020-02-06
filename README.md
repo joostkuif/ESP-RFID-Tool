@@ -138,14 +138,14 @@ Subnet: Typically set to 255.255.255.0
   
 Username: Username to configure/upgrade ESP-RFID-Tool  
 Password: Password to configure/upgrade ESP-RFID-Tool  
-
-MQTT Settings:
-
-MQTT host: The IP of the MQTT server
-MQTT port: The Port on which MQTT is listening on
-MQTT topic: The topic for the publish
-Domoticz idx: The idx which wil be set in the message, should correspond to the device id in Domoticz
-
+  
+MQTT Settings:  
+  
+MQTT host: The IP of the MQTT server  
+MQTT port: The Port on which MQTT is listening on  
+MQTT topic: The topic for the publish  
+Domoticz idx: The idx which wil be set in the message, should correspond to the device id in Domoticz  
+  
 FTP Server Settings:  
   
 Note: Supports Passive(PASV) Mode Only!  
